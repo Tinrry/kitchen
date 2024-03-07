@@ -1,6 +1,8 @@
 import os
 import natsort
 import glob
+import argparse
+import yaml
 
 from pymatgen.ext.matproj import MPRester
 from pymatgen.core.structure import Structure
@@ -11,14 +13,24 @@ from utils_openmx.utils import *
 
 # run poscar2openmx on the generated POSCARs
 def poscar2openmx_specific(material_id):
+    # need a tempplate.yaml
+    parser = argparse.ArgumentParser(description='openmx dat file generation')
+
+    # this is a template, we need get basic_command from this file
+    parser.add_argument('--config', default=f'poscar2openmx.yaml', type=str, metavar="N")
+    args = parser.parse_args()
+
+    with open(args.config, encoding='utf-8') as rstream:
+        input = yaml.load(rstream, yaml.SafeLoader)
 
     system_name = material_id
     poscar_file = f'{material_id}.vasp'
     save_path = f'{material_id}'
-    basic_command = '|+'
+    basic_command = input['basic_command']
     
     if not os.path.exists(save_path):
         os.makedirs(save_path)
+    
     f_poscar = glob.glob(poscar_file)
     f_poscar = natsort.natsorted(f_poscar)
 
@@ -30,16 +42,6 @@ def poscar2openmx_specific(material_id):
         filename = os.path.join(save_path, f'{system_name}_{cif_id}.dat')
         ase_atoms_to_openmxfile(ase_atoms, basic_command, spin_set, PAO_dict, PBE_dict, filename)
     return save_path
-
-    #TODO maybe poscar2openmx is a executable file, so we can run it directly
-    # for i in range(len(f_vasp)):
-    #     f = f_vasp[i]
-    #     print(f)
-    #     print('poscar2openmx < ' + f)
-    #     subprocess.run('poscar2openmx < ' + f, shell=True)
-    #     subprocess.run('mv *.dat ' + save_path, shell=True)
-    #     subprocess.run('mv *.in ' + save_path, shell=True)
-    #     subprocess.run('mv *.sh ' + save_path, shell=True)
 
 
 # run graph_data_generation on the generated .scfout files
@@ -414,7 +416,7 @@ def copy_graph_data_generation(nao_max,
 def download_by_material_id(material_ids):
     # generate POSCARs from material ids
     # the id of material must validate in https://next-gen.materialsproject.org/materials?_limit=75#6c7ee89d-639e-4f85-bd1a-01441ec77ad2
-   # api_key get from material project dashboard. 
+    
     API_KEY = open('api_key', 'r').read().strip()
     with MPRester(API_KEY) as m:
         for material_id in material_ids:
@@ -422,21 +424,34 @@ def download_by_material_id(material_ids):
             structure.to(f'{material_id}.vasp', 'poscar')
 
 
-# if __name__ == '__main__':
-import subprocess
-material_ids = ['mp-2', 'mp-3']     # this material exist, but not support this compute
-# download_by_material_id(material_ids)
-# run poscar2openmx on the generated POSCARs
-for material_id in material_ids:
-    save_path = poscar2openmx_specific(material_id)
-    # run openmx in mpi-mode on the generated .dat files
-    command_line = 'mpirun -np 1 ' + 'openmx ' + material_id + '/*.dat'
-    subprocess.run(command_line, shell=True)
-    command_line_2 = 'mpirun -np 1 ' + 'openmx_postprocess/openmx_postprocess ' + material_id + '/*.dat'
-    subprocess.run(command_line_2, shell=True)
-    # move the .scfout files to the material_id folder
-    command_line_3 = 'mv *.scfout ' + material_id
-    subprocess.run(command_line_3, shell=True)
+if __name__ == '__main__':
+    import subprocess
+    import time
 
-    # graph_data_generation, package the structure and the scfout file into a graph_dat.npz file
-    graph_data_gen_specific(material_id)
+    #TODO this download scripts usually failed, but work in ipython. why.
+    # when you run this code, you need to change the material_ids to the material_ids you want to run
+    material_ids = ['mp-1199894', 'mp-1257168', 'mp-1204046', 'mp-667371']     # this material exist, but not support this compute
+    # download_by_material_id(material_ids)
+    # run poscar2openmx on the generated POSCARs
+    time_per_case = {}
+    for material_id in material_ids:
+        start_time = time.time()
+        save_path = poscar2openmx_specific(material_id)
+        # run openmx in mpi-mode on the generated .dat files
+        command_line = 'mpirun -np 2 ' + 'openmx ' + material_id + '/*.dat'
+        subprocess.run(command_line, shell=True)
+        command_line_2 = 'mpirun -np 2 ' + 'openmx_postprocess/openmx_postprocess ' + material_id + '/*.dat'
+        subprocess.run(command_line_2, shell=True)
+        # move the .scfout files to the material_id folder
+        command_line_3 = 'mv *.scfout ' + material_id
+        subprocess.run(command_line_3, shell=True)
+
+        # graph_data_generation, package the structure and the scfout file into a graph_dat.npz file
+        graph_data_gen_specific(material_id)
+        end_time = time.time()
+        time_per_case[material_id] = float(f'{end_time - start_time:.3f}')
+
+    # output to log
+    print('============== complete material ids ===============')
+    print(time_per_case)
+    print(f'total execution time: {sum(time_per_case.values())} s.')
